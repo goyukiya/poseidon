@@ -312,6 +312,10 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.ui.p2_setup_jog_delta_INPUT.currentIndexChanged.connect(self.send_p2_warning)
 		self.ui.p3_setup_jog_delta_INPUT.currentIndexChanged.connect(self.send_p3_warning)
 
+		#Px TTL
+		self.ui.TTL1.stateChanged.connect(self.set_p1_setup_Trigger)
+		self.ui.TTL2.stateChanged.connect(self.set_p2_setup_Trigger)
+		self.ui.TTL3.stateChanged.connect(self.set_p3_setup_Trigger)
 
 		# Px send settings
 		self.ui.p1_setup_send_BTN.clicked.connect(self.send_p1_settings)
@@ -889,6 +893,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.set_p1_speed()
 		self.set_p1_accel()
 		self.set_p1_setup_jog_delta()
+		self.set_p1_setup_Trigger()
 		self.set_p1_amount()
 
 	def set_p2_syringe(self):
@@ -900,6 +905,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.set_p2_speed()
 		self.set_p2_accel()
 		self.set_p2_setup_jog_delta()
+		self.set_p2_setup_Trigger()
 		self.set_p2_amount()
 
 	def set_p3_syringe(self):
@@ -911,6 +917,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.set_p3_speed()
 		self.set_p3_accel()
 		self.set_p3_setup_jog_delta()
+		self.set_p3_setup_Trigger()
 		self.set_p3_amount()
 
 	# Set Px units
@@ -1003,6 +1010,23 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.p3_setup_jog_delta = float(self.ui.p3_setup_jog_delta_INPUT.currentText())
 		self.p3_setup_jog_delta_to_send = self.convert_displacement(self.p3_setup_jog_delta, self.p3_units, self.p3_syringe_area, self.microstepping)
 
+	# set Px TTL trigger settings
+	def set_p1_setup_Trigger(self):
+		if self.ui.TTL1.isChecked():
+			self.p1_TTL = 1.0
+		else:
+			self.p1_TTL = 0.0
+	def set_p2_setup_Trigger(self):
+		if self.ui.TTL2.isChecked():
+			self.p2_TTL = 1.0
+		else:
+			self.p2_TTL = 0.0
+	def set_p3_setup_Trigger(self):
+		if self.ui.TTL3.isChecked():
+			self.p3_TTL = 1.0
+		else:
+			self.p3_TTL = 0.0
+
 	# Send Px settings
 	def send_p1_settings(self):
 		self.statusBar().showMessage("You clicked SEND P1 SETTINGS")
@@ -1010,7 +1034,8 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.p1_settings.append("<SETTING,SPEED,1," + str(self.p1_speed_to_send) + ",F,0.0,0.0,0.0>")
 		self.p1_settings.append("<SETTING,ACCEL,1," + str(self.p1_accel_to_send) + ",F,0.0,0.0,0.0>")
 		self.p1_settings.append("<SETTING,DELTA,1," + str(self.p1_setup_jog_delta_to_send) + ",F,0.0,0.0,0.0>")
-
+		self.p1_settings.append("<SETTING,TTL,1," + str(self.p1_TTL) + ",F,0.0,0.0,0.0>")
+		
 		print("Sending P1 SETTINGS..")
 		thread = Thread(self.runTest, self.p1_settings)
 		thread.finished.connect(lambda:self.thread_finished(thread))
@@ -1023,6 +1048,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.p2_settings.append("<SETTING,SPEED,2," + str(self.p2_speed_to_send) + ",F,0.0,0.0,0.0>")
 		self.p2_settings.append("<SETTING,ACCEL,2," + str(self.p2_accel_to_send) + ",F,0.0,0.0,0.0>")
 		self.p2_settings.append("<SETTING,DELTA,2," + str(self.p2_setup_jog_delta_to_send) + ",F,0.0,0.0,0.0>")
+		self.p2_settings.append("<SETTING,TTL,2," + str(self.p2_TTL) + ",F,0.0,0.0,0.0>")
 
 		print("Sending P2 SETTINGS..")
 		thread = Thread(self.runTest, self.p2_settings)
@@ -1036,6 +1062,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.p3_settings.append("<SETTING,SPEED,3," + str(self.p3_speed_to_send) + ",F,0.0,0.0,0.0>")
 		self.p3_settings.append("<SETTING,ACCEL,3," + str(self.p3_accel_to_send) + ",F,0.0,0.0,0.0>")
 		self.p3_settings.append("<SETTING,DELTA,3," + str(self.p3_setup_jog_delta_to_send) + ",F,0.0,0.0,0.0>")
+		self.p3_settings.append("<SETTING,TTL,3," + str(self.p3_TTL) + ",F,0.0,0.0,0.0>")
 
 		print("Sending P3 SETTINGS..")
 		thread = Thread(self.runTest, self.p3_settings)
@@ -1109,14 +1136,17 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 		self.settings.append("<SETTING,SPEED,1,"+str(self.p1_speed_to_send)+",F,0.0,0.0,0.0>")
 		self.settings.append("<SETTING,ACCEL,1,"+str(self.p1_accel_to_send)+",F,0.0,0.0,0.0>")
 		self.settings.append("<SETTING,DELTA,1,"+str(self.p1_setup_jog_delta_to_send)+",F,0.0,0.0,0.0>")
+		self.settings.append("<SETTING,TTL,1," + str(self.p1_TTL) + ",F,0.0,0.0,0.0>")
 
 		self.settings.append("<SETTING,SPEED,2,"+str(self.p2_speed_to_send)+",F,0.0,0.0,0.0>")
 		self.settings.append("<SETTING,ACCEL,2,"+str(self.p2_accel_to_send)+",F,0.0,0.0,0.0>")
 		self.settings.append("<SETTING,DELTA,2,"+str(self.p2_setup_jog_delta_to_send)+",F,0.0,0.0,0.0>")
+		self.settings.append("<SETTING,TTL,2," + str(self.p2_TTL) + ",F,0.0,0.0,0.0>")
 
 		self.settings.append("<SETTING,SPEED,3,"+str(self.p3_speed_to_send)+",F,0.0,0.0,0.0>")
 		self.settings.append("<SETTING,ACCEL,3,"+str(self.p3_accel_to_send)+",F,0.0,0.0,0.0>")
 		self.settings.append("<SETTING,DELTA,3,"+str(self.p3_setup_jog_delta_to_send)+",F,0.0,0.0,0.0>")
+		self.settings.append("<SETTING,TTL,3," + str(self.p3_TTL) + ",F,0.0,0.0,0.0>")
 
 		print("Sending all settings..")
 		thread = Thread(self.runTest, self.settings)
