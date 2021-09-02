@@ -13,6 +13,10 @@
 #define Y_STP 3 // Y
 #define Z_STP 4 // Z
 
+#define X_TTL_PIN 8 // X stepper, ttl trigger pin
+#define Y_TTL_PIN 9
+#define Z_TTL_PIN 10
+
 #define X_SPEED 1000 // X steps per second
 #define Y_SPEED 1000 // Y
 #define Z_SPEED 1000 // Z
@@ -42,6 +46,7 @@ typedef struct
   float _distance;
   bool _running;
   bool _trigger;
+  short _TTLpin;
 } StepperMotorParam;
 
 /*
@@ -63,6 +68,8 @@ void serialPrintStepperMotor(StepperMotorParam *p)
   Serial.print(p->_running);
   Serial.print(", trigger: ");
   Serial.println(p->_trigger);
+  Serial.print(", TTLpin: ");
+  Serial.println(p->_TTLpin);
 }
 
 AccelStepper stepperX(AccelStepper::DRIVER, X_STP, X_DIR);
@@ -71,9 +78,9 @@ AccelStepper stepperZ(AccelStepper::DRIVER, Z_STP, Z_DIR);
 
 // ptr, accel, speed, delta, position, distance, running, trigger
 StepperMotorParam stepperArr[3]= {
-  {NULL,0,0,0,0,0,false,false},
-  {NULL,0,0,0,0,0,false,false},
-  {NULL,0,0,0,0,0,false,false}
+  {NULL,0,0,0,0,0,false,false,-1},
+  {NULL,0,0,0,0,0,false,false,-1},
+  {NULL,0,0,0,0,0,false,false,-1}
 };
 
 // data read buffer
@@ -81,7 +88,7 @@ char inBuffer[MAXBUFFERSIZE];
 // new message available
 bool readInProgress=false;
 bool messageToProcess = false;
-bool anyMotorRunning=false;
+bool anyMotorRunning= false;
 
 /*
   Checks if a number contains a specific digit.
@@ -337,17 +344,7 @@ void parseMessage()
   {
     p_optional[0]= p_optional[1]= p_optional[2]= 999999.0;
   }
-
-  // print the motorID and status
-//  Serial.println("string");
-//  Serial.println(motorID);
-//  Serial.println("Status");
-//  Serial.println(containsDigit(motorID,1)?1:0);
-//  Serial.println(containsDigit(motorID,2)?1:0);
-//  Serial.println(containsDigit(motorID,3)?1:0);
-//  Serial.println("Status Distances");
-//  for(short i=0;i<3;i++) Serial.println(stepperArr[i]._distance);
-  
+ 
   // reply
   replyToPC(mode, setting, motorID, value, dir, p_optional[0], p_optional[1], p_optional[2]);
 
@@ -403,10 +400,7 @@ void parseMessage()
         motorID /= 10;
       }
     }
-    else
-    {
-      resumeMotor(motorID);
-    }
+    else resumeMotor(motorID);
   }
 }
 
@@ -443,11 +437,18 @@ static int protothreadMoveMotors(struct pt *pt)
     {
       if(stepperArr[i]._running)
       {
-        stepperArr[i]._ptr->run();
-        // update distance
-        stepperArr[i]._distance = stepperArr[i]._ptr->distanceToGo();
-        // Check if final position reached
-        if (stepperArr[i]._distance == 0) stepperArr[i]._running=false;
+        bool doRun = true; 
+        // check for ttl
+        if(stepperArr[i]._trigger) doRun = (digitalRead(stepperArr[i]._TTLpin)==HIGH);
+        
+        if(doRun)
+        {
+          stepperArr[i]._ptr->run();
+          // update distance
+          stepperArr[i]._distance = stepperArr[i]._ptr->distanceToGo();
+          // Check if final position reached
+          if (stepperArr[i]._distance == 0) stepperArr[i]._running=false;
+        }
       }
       anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
     }
@@ -462,23 +463,33 @@ static int protothreadMoveMotors(struct pt *pt)
 void setup()
 {
   Serial.begin(BAUD_RATE);
+
+  // TTL input pin
+  pinMode(X_TTL_PIN, INPUT);
+  pinMode(Y_TTL_PIN, INPUT);
+  pinMode(Z_TTL_PIN, INPUT);
+  
   // flash LED
   pinMode(LEDPIN, OUTPUT);
   digitalWrite(LEDPIN, HIGH);
   delay(500);
   digitalWrite(LEDPIN, LOW);
   delay(500);
-  // init steppers
   
-  stepperArr[0]._ptr = &stepperX;
-  stepperArr[1]._ptr = &stepperY;
-  stepperArr[2]._ptr = &stepperZ;
+  // init steppers
+  stepperArr[0]._ptr= &stepperX;
+  stepperArr[1]._ptr= &stepperY;
+  stepperArr[2]._ptr= &stepperZ;
   stepperArr[0]._speed= X_SPEED;
   stepperArr[1]._speed= Y_SPEED;
   stepperArr[2]._speed= Z_SPEED;
   stepperArr[0]._accel= X_ACCEL;
   stepperArr[1]._accel= Y_ACCEL;
   stepperArr[2]._accel= Z_ACCEL;
+  stepperArr[0]._TTLpin= X_TTL_PIN;
+  stepperArr[1]._TTLpin= Y_TTL_PIN;
+  stepperArr[2]._TTLpin= Z_TTL_PIN;
+  
   // update motors
   for(short i=1; i<4; i++)
   {
@@ -505,4 +516,4 @@ void loop()
   protothreadParseMessage(&pt2);
   protothreadMoveMotors(&pt3);
 }
-//eof
+/* eof */
