@@ -47,6 +47,7 @@ typedef struct
   bool _running;
   bool _trigger;
   short _TTLpin;
+  bool _sendUpdate;
 } StepperMotorParam;
 
 /*
@@ -78,9 +79,9 @@ AccelStepper stepperZ(AccelStepper::DRIVER, Z_STP, Z_DIR);
 
 // ptr, accel, speed, delta, position, distance, running, trigger
 StepperMotorParam stepperArr[3]= {
-  {NULL,0,0,0,0,0,false,false,-1},
-  {NULL,0,0,0,0,0,false,false,-1},
-  {NULL,0,0,0,0,0,false,false,-1}
+  {NULL,0,0,0,0,0,false,false,-1,false},
+  {NULL,0,0,0,0,0,false,false,-1,false},
+  {NULL,0,0,0,0,0,false,false,-1,false}
 };
 
 // data read buffer
@@ -89,6 +90,7 @@ char inBuffer[MAXBUFFERSIZE];
 bool readInProgress=false;
 bool messageToProcess = false;
 bool anyMotorRunning= false;
+unsigned long myTime= millis();
 
 /*
   Checks if a number contains a specific digit.
@@ -432,7 +434,8 @@ static int protothreadMoveMotors(struct pt *pt)
   PT_BEGIN(pt);
   while(1) 
   {
-    PT_WAIT_UNTIL(pt,!readInProgress && anyMotorRunning);
+    PT_WAIT_UNTIL(pt,!readInProgress && !messageToProcess && anyMotorRunning);
+    bool doUpdate = (millis()-myTime > 1000);
     for(short i=0;i<3;i++)
     {
       if(stepperArr[i]._running)
@@ -447,11 +450,34 @@ static int protothreadMoveMotors(struct pt *pt)
           // update distance
           stepperArr[i]._distance = stepperArr[i]._ptr->distanceToGo();
           // Check if final position reached
-          if (stepperArr[i]._distance == 0) stepperArr[i]._running=false;
+          if (stepperArr[i]._distance == 0) 
+          {
+            stepperArr[i]._running=false;
+            stepperArr[i]._sendUpdate=true;
+            doUpdate=true;//force update
+          }
+          if(doUpdate) stepperArr[i]._sendUpdate=true;
         }
       }
-      anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
     }
+    // send position updates
+    if(doUpdate)
+    {
+      for(short i=0;i<3;i++)
+      {
+        if(stepperArr[i]._sendUpdate)
+        {
+          char tmpBuff[40];
+          sprintf(tmpBuff, "<P%d,%ld,%ld,%ld>", i+1,stepperArr[i]._ptr->targetPosition(), stepperArr[i]._ptr->currentPosition(),stepperArr[i]._ptr->distanceToGo() );
+          Serial.println(tmpBuff);
+          tmpBuff[0]=0;
+          stepperArr[i]._sendUpdate=false;
+        } 
+      }
+      myTime=millis();
+    }
+    anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running; 
+    PT_WAIT_UNTIL(pt,Serial.available()==0); // allow read if any
   }
   // Stop the protothread
   PT_END(pt);
