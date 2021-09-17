@@ -21,7 +21,7 @@ import numpy as np
 from decimal import Decimal
 # This is our window from QtCreator
 import poseidon_controller_gui
-import pdb
+#import pdb
 import traceback, sys
 
 # for serial thread
@@ -55,8 +55,6 @@ class WorkerSignals(QtCore.QObject):
 # #############################
 # MULTITHREADING : WORKER CLASS
 # #############################
-
-
 class Thread(QtCore.QThread):
     def __init__(self, fn, *args, **kwargs):
         parent = None
@@ -97,7 +95,7 @@ class ArduinoSerialThread:
         self.__lock= threading.Lock()
         self.__sendQueue= queue.Queue()
         self.__recvQueue= queue.Queue()
-        self.__delay= 0.1
+        self.__delay= 0.05
         try:
             self.__serial = serial.Serial()
             self.__serial.port = port
@@ -135,8 +133,9 @@ class ArduinoSerialThread:
                     print("[ArduinoSerialThread] received <<< "+msg)
                 self.__lock.release()
             time.sleep(self.__delay)
-            
+
         print("[ArduinoSerialThread] Thread ended")
+        self.__serial.close()
 
     def __sendMessage(self,msg):
         self.__serial.write(msg.encode())
@@ -150,7 +149,6 @@ class ArduinoSerialThread:
             # trim message
             startIdx = msg.find('<')
             endIdx =msg.find('>')
-            print((startIdx,endIdx))
             if startIdx < endIdx:
                 msg = msg[startIdx+1:endIdx]
         return msg
@@ -169,9 +167,14 @@ class ArduinoSerialThread:
             msg=""
         return msg
 
+    def requeueMessage(self,msg):
+        self.__lock.acquire()
+        self.__recvQueue.put(msg)
+        self.__lock.release()
+
     def start(self):
         print('[ArduinoSerialThread] Starting thread')
-        self.__thread.daemon = True
+        self.__thread.daemon = True # run as a daemon
         self.__thread.start()
 
     def stop(self):
@@ -404,6 +407,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.ui.p1_setup_send_BTN.clicked.connect(self.send_p1_settings)
         self.ui.p2_setup_send_BTN.clicked.connect(self.send_p2_settings)
         self.ui.p3_setup_send_BTN.clicked.connect(self.send_p3_settings)
+
         # remove warning to send settings
         self.ui.p1_setup_send_BTN.clicked.connect(self.send_p1_success)
         self.ui.p2_setup_send_BTN.clicked.connect(self.send_p2_success)
@@ -475,6 +479,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.ui.p2_setup_send_BTN.setEnabled(True)
         self.ui.p3_setup_send_BTN.setEnabled(True)
         self.ui.send_all_BTN.setEnabled(True)
+
     # ======================
     # FUNCTIONS : Controller
     # ======================
@@ -542,122 +547,93 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
             if radio.isChecked():
                 self.coordinate = "incremental"
 
+    # Run command
     def run(self):
         self.statusBar().showMessage("You clicked RUN")
-        testData = []
 
         active_pumps = self.get_active_pumps()
         if len(active_pumps) > 0:
-
             p1_input_displacement = str(self.convert_displacement(self.p1_amount, self.p1_units, self.p1_syringe_area, self.microstepping))
             p2_input_displacement = str(self.convert_displacement(self.p2_amount, self.p2_units, self.p2_syringe_area, self.microstepping))
             p3_input_displacement = str(self.convert_displacement(self.p3_amount, self.p3_units, self.p3_syringe_area, self.microstepping))
-
             pumps_2_run = ''.join(map(str,active_pumps))
 
-            cmd = "<RUN,DIST,"+pumps_2_run+",0.0,F," + p1_input_displacement + "," + p2_input_displacement + "," + p3_input_displacement + ">"
-
-            testData.append(cmd)
-
             print("Sending RUN command..")
-            thread = Thread(self.runTest, testData)
+            thread = Thread(self.runCmd, ["<RUN,DIST,{},0.0,F,{},{},{}>".format(pumps_2_run,p1_input_displacement,p2_input_displacement,p3_input_displacement)])
             thread.finished.connect(lambda:self.thread_finished(thread))
             thread.start()
-
             print("RUN command sent.")
         else:
             self.statusBar().showMessage("No pumps enabled.")
 
-    # Clean up this text
+    # Pause command
     def pause(self):
-        active_pumps = self.get_active_pumps()
-        pumps_2_run = ''.join(map(str,active_pumps))
-
-        if self.ui.pause_BTN.text() == "Pause":
-            self.statusBar().showMessage("You clicked PAUSE")
-            testData = []
-            cmd = "<PAUSE,BLAH," + pumps_2_run + ",BLAH,F,0.0,0.0,0.0>"
-            testData.append(cmd)
-
-            print("Sending PAUSE command..")
-            thread = Thread(self.runTest, testData)
-            thread.finished.connect(lambda:self.thread_finished(thread))
-            thread.start()
-            print("PAUSE command sent.")
-
-            self.ui.pause_BTN.setText("Resume")
-
-        elif self.ui.pause_BTN.text() == "Resume":
-            self.statusBar().showMessage("You clicked RESUME")
-            testData = []
-            cmd = "<RESUME,BLAH," + pumps_2_run + ",BLAH,F,0.0,0.0,0.0>"
-            testData.append(cmd)
-
-            print("Sending RESUME command..")
-            thread = Thread(self.runTest, testData)
-            thread.finished.connect(lambda:self.thread_finished(thread))
-            thread.start()
-            print("RESUME command sent.")
-
-            self.ui.pause_BTN.setText("Pause")
-
-    # fix
-    def zero(self):
-        self.statusBar().showMessage("You clicked ZERO")
-        testData = []
-
-        cmd = "<ZERO,BLAH,BLAH,BLAH,F,0.0,0.0,0.0>"
-
-        print("Sending ZERO command..")
-        thread = Thread(self.runTest, testData)
-        thread.finished.connect(lambda:self.thread_finished(thread))
-        thread.start()
-        print("ZERO command sent.")
-
-    def stop(self):
-        self.statusBar().showMessage("You clicked STOP")
-        cmd = "<STOP,BLAH,BLAH,BLAH,F,0.0,0.0,0.0>"
-
-        print("Sending STOP command..")
-        thread = Thread(self.send_single_command, cmd)
-        thread.finished.connect(lambda:self.thread_finished(thread))
-        thread.start()
-        print("STOP command sent.")
-
-    def jog(self, btn):
-        self.statusBar().showMessage("You clicked JOG")
-        #self.serial.flushInput()
-        testData = []
         active_pumps = self.get_active_pumps()
         if len(active_pumps) > 0:
             pumps_2_run = ''.join(map(str,active_pumps))
 
+            if self.ui.pause_BTN.text() == "Pause":
+                self.statusBar().showMessage("You clicked PAUSE")
+                cmd = "PAUSE"
+                # update button text
+                self.ui.pause_BTN.setText("Resume")
+            elif self.ui.pause_BTN.text() == "Resume":
+                self.statusBar().showMessage("You clicked RESUME")
+                cmd = "RESUME"
+                # update button text
+                self.ui.pause_BTN.setText("Pause")
+            
+            print("Sending PAUSE command..")
+            thread = Thread(self.runCmd, ["<{},BLAH,{},BLAH,F,0.0,0.0,0.0>".format(cmd,pumps_2_run)])
+            thread.finished.connect(lambda:self.thread_finished(thread))
+            thread.start()
+            print("PAUSE command sent.")
+        else:
+            self.statusBar().showMessage("No pumps enabled.")
+
+    # Zero command
+    def zero(self):
+        active_pumps = self.get_active_pumps()
+        if len(active_pumps) > 0:
+            self.statusBar().showMessage("You clicked ZERO")
+            print("Sending ZERO command..")
+            thread = Thread(self.runCmd, ["<ZERO,BLAH,{},BLAH,F,0.0,0.0,0.0>".format(''.join(map(str,active_pumps)))])
+            thread.finished.connect(lambda:self.thread_finished(thread))
+            thread.start()
+            print("ZERO command sent.")
+        else:
+            self.statusBar().showMessage("No pumps enabled.")
+
+    # Stop command
+    def stop(self):
+        self.statusBar().showMessage("You clicked STOP")
+        print("Sending STOP command..")
+        thread = Thread(self.runCmd, ["<STOP,BLAH,BLAH,BLAH,F,0.0,0.0,0.0>"])
+        thread.finished.connect(lambda:self.thread_finished(thread))
+        thread.start()
+        print("STOP command sent.")
+
+    # Jog command
+    def jog(self, btn):
+        active_pumps = self.get_active_pumps()
+        if len(active_pumps) > 0:
+            pumps_2_run = ''.join(map(str,active_pumps))
             one_jog = str(self.p1_setup_jog_delta_to_send)
             two_jog = str(self.p2_setup_jog_delta_to_send)
             three_jog = str(self.p3_setup_jog_delta_to_send)
 
+            direction ='F'
             if btn.text() == "Jog +":
                 self.statusBar().showMessage("You clicked JOG +")
-                f_cmd = "<RUN,DIST," + pumps_2_run +",0,F," + one_jog + "," + two_jog + "," + three_jog + ">"
-                testData.append(f_cmd)
-
-                print("Sending JOG command..")
-
-                thread = Thread(self.runTest, testData)
-                thread.finished.connect(lambda:self.thread_finished(thread))
-                thread.start()
-                print("JOG command sent.")
-
             elif btn.text() == "Jog -":
                 self.statusBar().showMessage("You clicked JOG -")
-                b_cmd = "<RUN,DIST," + pumps_2_run +",0,B," + one_jog + "," + two_jog + "," + three_jog + ">"
-                testData.append(b_cmd)
-
-                print("Sending JOG command..")
-                thread = Thread(self.runTest, testData)
-                thread.finished.connect(lambda:self.thread_finished(thread))
-                thread.start()
-                print("JOG command sent.")
+                direction='B'
+            
+            print("Sending JOG command..")
+            thread = Thread(self.runCmd, ["<RUN,DIST,{},0,{},{},{},{}>".format(pumps_2_run,direction,one_jog,two_jog,three_jog)])
+            thread.finished.connect(lambda:self.thread_finished(thread))
+            thread.start()
+            print("JOG command sent.")
         else:
             self.statusBar().showMessage("No pumps enabled.")
 
@@ -1118,7 +1094,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.p1_settings.append("<SETTING,TTL,1," + str(self.p1_TTL) + ",F,0.0,0.0,0.0>")
         
         print("Sending P1 SETTINGS..")
-        thread = Thread(self.runTest, self.p1_settings)
+        thread = Thread(self.runCmd, self.p1_settings)
         thread.finished.connect(lambda:self.thread_finished(thread))
         thread.start()
         print("P1 SETTINGS sent.")
@@ -1132,7 +1108,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.p2_settings.append("<SETTING,TTL,2," + str(self.p2_TTL) + ",F,0.0,0.0,0.0>")
 
         print("Sending P2 SETTINGS..")
-        thread = Thread(self.runTest, self.p2_settings)
+        thread = Thread(self.runCmd, self.p2_settings)
         thread.finished.connect(lambda:self.thread_finished(thread))
         thread.start()
         print("P2 SETTINGS sent.")
@@ -1146,7 +1122,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.p3_settings.append("<SETTING,TTL,3," + str(self.p3_TTL) + ",F,0.0,0.0,0.0>")
 
         print("Sending P3 SETTINGS..")
-        thread = Thread(self.runTest, self.p3_settings)
+        thread = Thread(self.runCmd, self.p3_settings)
         thread.finished.connect(lambda:self.thread_finished(thread))
         thread.start()
         print("P3 SETTINGS sent.")
@@ -1204,6 +1180,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.statusBar().showMessage("You clicked DISCONNECT FROM BOARD")
         print("Disconnecting from board..")
         self.arduinoThread.stop()
+        self.positionThreadEnabled= False
         time.sleep(3)
         # self.serial.close()
         print("Board has been disconnected")
@@ -1233,7 +1210,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         self.settings.append("<SETTING,TTL,3," + str(self.p3_TTL) + ",F,0.0,0.0,0.0>")
 
         print("Sending all settings..")
-        thread = Thread(self.runTest, self.settings)
+        thread = Thread(self.runCmd, self.settings)
         thread.finished.connect(lambda:self.thread_finished(thread))
         thread.start()
         print("Done!")
@@ -1341,7 +1318,6 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         length = units.split("/")[0]
         time = units.split("/")[1]
 
-
         # convert length first
         if length == "mm":
             speed = self.mm2steps(inp_speed, microsteps)
@@ -1349,7 +1325,6 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
             speed = self.mL2steps(inp_speed, syringe_area, microsteps)
         elif length == "µL":
             speed = self.uL2steps(inp_speed, syringe_area, microsteps)
-
 
         # convert time next
         if time == "s":
@@ -1404,103 +1379,134 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
     IMPORTANT: These are for BD Plastic syringes ONLY!! Others will vary.
     '''
 
-    def runTest(self, messages):
-        nMessages = len(messages)
-        i = 0
+    # thread function to run a command
+    def runCmd(self, messages):
 
-        while i < nMessages:
-            print("processing message {}...".format(i))
-            self.arduinoThread.pushSendMessage(messages[i])
-            print("waiting for reply")
-            waitForReply=True
-            while waitForReply:
+        self.positionThreadEnabled=False
+        time.sleep(0.3)
+
+        for message in messages:
+            print("processing {}...".format(message))
+            self.arduinoThread.pushSendMessage(message)
+            while 1:
                 msg = self.arduinoThread.getRecvMessage()
                 if not msg:
-                    time.sleep(0.4)  
+                    time.sleep(0.3)  
                 else:
-                    waitForReply=False
-            # next message
-            i=i+1
+                    break
+            print("... done!")
+        
+        # start the position update thread 
+        self.positionThreadEnabled=True
+        self.positionThread = Thread(self.updatePosition)
+        self.positionThread.finished.connect(lambda:self.self.thread_finished(self.positionThread))
+        self.positionThread.start()
+
         print("Send and receive complete\n")
 
-    def send_single_command(self, command):
-        waiting_for_reply = False
-        if waiting_for_reply == False:
-            self.arduinoThread.pushSendMessage(command)
-            #print("Sent from PC -- STR " + command)
-            waiting_for_reply = True
-        if waiting_for_reply == True:
-            while self.serial.inWaiting() == 0:
-                pass
-            #data_received = self.recvFromArduino2()
-            data_received = "from other func"
-            print("Reply Received -- " + data_received)
-            waiting_for_reply = False
-            print("=============================\n\n")
-            print("Sent a single command")
+    # def send_single_command(self, command):
+    #     waiting_for_reply = False
+    #     if waiting_for_reply == False:
+    #         self.arduinoThread.pushSendMessage(command)
+    #         #print("Sent from PC -- STR " + command)
+    #         waiting_for_reply = True
+    #     if waiting_for_reply == True:
+    #         while self.serial.inWaiting() == 0:
+    #             pass
+    #         #data_received = self.recvFromArduino2()
+    #         data_received = "from other func"
+    #         print("Reply Received -- " + data_received)
+    #         waiting_for_reply = False
+    #         print("=============================\n\n")
+    #         print("Sent a single command")
 
-    def listening(self):
-        startMarker = self.startMarker
-        midMarker = self.midMarker
-        endMarker = self.endMarker
-        posMarker = ord('?')
-        i = 0
+    # thread function for updating pump positions
+    def updatePosition(self):
+        print("[UpdatePosition] started")
+        while 1:
+            if not self.positionThreadEnabled:
+                break
+            msg = self.arduinoThread.getRecvMessage()
+            if not msg:
+                time.sleep(0.05)
+                continue
+            # position message structure Px,target,absolute,remaining
+            parts = msg.split(',')
+            if parts[0]=="P1":
+                self.ui.p1_absolute_DISP.display(parts[2])
+                self.ui.p1_remain_DISP.display(parts[3])
+            elif parts[0]=="P2":
+                self.ui.p2_absolute_DISP.display(parts[2])
+                self.ui.p2_remain_DISP.display(parts[3])
+            elif parts[0]=="P3":
+                self.ui.p3_absolute_DISP.display(parts[2])
+                self.ui.p3_remain_DISP.display(parts[3])
+            elif parts[0] in ["SETTING","RUN","ZERO","PAUSE","STOP","RESUME"]:
+                self.arduinoThread.requeueMessage(msg)
+        print("[UpdatePosition] done")
 
-        while (True):
-            self.serial.flushInput()
-            x = "z"
-            ck = ""
-            isDisplay = "asdf"
-            while self.serial.inWaiting() == 0:
-                pass
-            while  not x or ord(x) != startMarker:
-                x = self.serial.read()
-                #if ord(x) == posMarker:
-                #	return self.get_position()
-            while ord(x) != endMarker:
-                if ord(x) == midMarker:
-                    i += 1
-                    print(ck)
-                    #isDisplay = ck
-                    #if i % 100 == 0:
-                    #	self.ui.p1_absolute_DISP.display(ck)
-                    ck = ""
-                    x = self.serial.read()
+    # def listening(self):
+    #     startMarker = self.startMarker
+    #     midMarker = self.midMarker
+    #     endMarker = self.endMarker
+    #     posMarker = ord('?')
+    #     i = 0
 
-                if ord(x) != startMarker:
-                    ck = ck + x.decode()
+    #     while (True):
+    #         self.serial.flushInput()
+    #         x = "z"
+    #         ck = ""
+    #         isDisplay = "asdf"
+    #         while self.serial.inWaiting() == 0:
+    #             pass
+    #         while  not x or ord(x) != startMarker:
+    #             x = self.serial.read()
+    #             #if ord(x) == posMarker:
+    #             #	return self.get_position()
+    #         while ord(x) != endMarker:
+    #             if ord(x) == midMarker:
+    #                 i += 1
+    #                 print(ck)
+    #                 #isDisplay = ck
+    #                 #if i % 100 == 0:
+    #                 #	self.ui.p1_absolute_DISP.display(ck)
+    #                 ck = ""
+    #                 x = self.serial.read()
 
-                x = self.serial.read()
-                # TODO
-            #if isDisplay == "START":
-            #	print("This is ck: " + ck)
-                #motorID = int(ck)
-                #self.is_p1_running = True
-                #run thread(self.display_position, motorID)
+    #             if ord(x) != startMarker:
+    #                 ck = ck + x.decode()
 
-                #toDisp = self.steps2mm(float(ck))
-                #print("Pump num " + toDisp + " is now running.")i
-                #self.ui.p1_absolute_DISP.display(toDisp)
-                #isDisplay = ""
+    #             x = self.serial.read()
+    #             # TODO
+    #         #if isDisplay == "START":
+    #         #	print("This is ck: " + ck)
+    #             #motorID = int(ck)
+    #             #self.is_p1_running = True
+    #             #run thread(self.display_position, motorID)
 
-            #self.serial.flushInput()
-            #print(self.serial.read(self.serial.inWaiting()).decode('ascii'))
-            print(ck)
-            print("\n")
+    #             #toDisp = self.steps2mm(float(ck))
+    #             #print("Pump num " + toDisp + " is now running.")i
+    #             #self.ui.p1_absolute_DISP.display(toDisp)
+    #             #isDisplay = ""
 
-    def get_position(self):
-        ck = ""
-        x = self.serial.read()
+    #         #self.serial.flushInput()
+    #         #print(self.serial.read(self.serial.inWaiting()).decode('ascii'))
+    #         print(ck)
+    #         print("\n")
 
-        while ord(x) != self.endMarker:
-            if ord(x) == self.midMarker:
-                print(ck)
-                ck = ""
-                x = self.serial.read()
-            ck = ck + x.decode()
-            x = self.serial.read()
-        print(ck)
-        return (ck)
+    # def get_position(self):
+    #     ck = ""
+    #     x = self.serial.read()
+
+    #     while ord(x) != self.endMarker:
+    #         if ord(x) == self.midMarker:
+    #             print(ck)
+    #             ck = ""
+    #             x = self.serial.read()
+    #         ck = ck + x.decode()
+    #         x = self.serial.read()
+    #     print(ck)
+    #     return (ck)
 
     def closeEvent(self, event):
         try:

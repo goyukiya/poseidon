@@ -191,7 +191,7 @@ class Ui_MainWindow(object):
         self.p1_absolute_DISP = QtWidgets.QLCDNumber(self.control)
         self.p1_absolute_DISP.setFrameShape(QtWidgets.QFrame.Panel)
         self.p1_absolute_DISP.setFrameShadow(QtWidgets.QFrame.Sunken)
-        self.p1_absolute_DISP.setDigitCount(4)
+        self.p1_absolute_DISP.setDigitCount(5)
         self.p1_absolute_DISP.setObjectName("p1_absolute_DISP")
         self.gridLayout_6.addWidget(self.p1_absolute_DISP, 1, 1, 1, 1)
         self.verticalLayout_9.addLayout(self.gridLayout_6)
