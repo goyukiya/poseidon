@@ -13,10 +13,6 @@
 #define Y_STP 3 // Y
 #define Z_STP 4 // Z
 
-#define X_TTL_PIN 8 // X stepper, ttl trigger pin
-#define Y_TTL_PIN 9
-#define Z_TTL_PIN 10
-
 #define X_SPEED 1000 // X steps per second
 #define Y_SPEED 1000 // Y
 #define Z_SPEED 1000 // Z
@@ -25,11 +21,11 @@
 #define Y_ACCEL 5000.0 // Y
 #define Z_ACCEL 5000.0 // Z
 
+#define TTLPIN 12 // ttl trigger pin
 #define LEDPIN 13 // status led
 
 #define BAUD_RATE 230400 // serial port rate
 #define MAXBUFFERSIZE 64 // data read buffer size
-#define MAXQUEUESIZE 5 // message queue size
 
 /*
   Global Variables 
@@ -42,36 +38,11 @@ typedef struct
   float _accel;
   float _speed;
   float _delta;
-  float _position;
   float _distance;
   bool _running;
   bool _trigger;
-  short _TTLpin;
   bool _sendUpdate;
 } StepperMotorParam;
-
-/*
-  Print stepper motor values.
-*/
-void serialPrintStepperMotor(StepperMotorParam *p)
-{
-  Serial.print("accel: ");
-  Serial.print(p->_accel);
-  Serial.print(", speed: ");
-  Serial.print(p->_speed);
-  Serial.print(", delta: ");
-  Serial.print(p->_delta);
-  Serial.print(", position: ");
-  Serial.print(p->_position);
-  Serial.print(", distance: ");
-  Serial.print(p->_distance);
-  Serial.print(", running: ");
-  Serial.print(p->_running);
-  Serial.print(", trigger: ");
-  Serial.print(p->_trigger);
-  Serial.print(", TTLpin: ");
-  Serial.print(p->_TTLpin);
-}
 
 AccelStepper stepperX(AccelStepper::DRIVER, X_STP, X_DIR);
 AccelStepper stepperY(AccelStepper::DRIVER, Y_STP, Y_DIR);
@@ -79,18 +50,23 @@ AccelStepper stepperZ(AccelStepper::DRIVER, Z_STP, Z_DIR);
 
 // ptr, accel, speed, delta, position, distance, running, trigger, update
 StepperMotorParam stepperArr[3]= {
-  {NULL,0,0,0,0,0,false,false,-1,false},
-  {NULL,0,0,0,0,0,false,false,-1,false},
-  {NULL,0,0,0,0,0,false,false,-1,false}
+  {NULL,0,0,0,0,false,false,false},
+  {NULL,0,0,0,0,false,false,false},
+  {NULL,0,0,0,0,false,false,false}
 };
 
 // data read buffer
 char inBuffer[MAXBUFFERSIZE];
-// new message available
-bool readInProgress=false;
-bool messageToProcess = false;
+// flags
+bool readInProgress= false;
+bool messageToProcess= false;
 bool anyMotorRunning= false;
+
 unsigned long myTime= millis();
+
+// =================================================================================
+// =================================================================================
+// =================================================================================
 
 /*
   Checks if a number contains a specific digit.
@@ -109,172 +85,97 @@ bool containsDigit(int num, int d)
 }
 
 /*
-  Print stepper motor parameters.
+  Update running flag.
 */
-void printStepperMotor(int motorID)
+void updateRunningFlag()
 {
-  if(motorID>3 || motorID<1) return;
-  else
-  {
-    Serial.print("<MotorInfo: ");
-    Serial.print(motorID);
-    Serial.print(", ");
-    serialPrintStepperMotor(&stepperArr[motorID-1]);
-    Serial.println(">");
-  }
+  anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
 }
 
 /*
   Pause a motor.
 */
-void pauseMotor(int motorID)
+void pauseMotor(int idx)
 {
-  if(motorID>3 || motorID<1) return;
-  else if(stepperArr[motorID-1]._running && stepperArr[motorID-1]._distance>0)
+  if(stepperArr[idx]._running && stepperArr[idx]._distance!=0)
   { 
-      stepperArr[motorID-1]._running=false;
-      stepperArr[motorID-1]._ptr->stop();
+      stepperArr[idx]._running=false;
+      stepperArr[idx]._ptr->stop();
   }
-  // update running flag
-  anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
+  updateRunningFlag();
 }
 
 /*
   Resume a motor motion.
 */
-void resumeMotor(int motorID)
+void resumeMotor(int idx)
 {
-  if(motorID>3 || motorID<1) return;
-  else if(!stepperArr[motorID-1]._running && stepperArr[motorID-1]._distance>0)
+  if(!stepperArr[idx]._running && stepperArr[idx]._distance!=0)
   {
-    stepperArr[motorID-1]._running=true;
-    stepperArr[motorID-1]._ptr->move(stepperArr[motorID-1]._distance);
+    stepperArr[idx]._running=true;
+    stepperArr[idx]._ptr->move(stepperArr[idx]._distance);
   }
-  // update running flag
-  anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
+  updateRunningFlag();
+}
+
+/*
+  Stop a motor.
+*/
+void stopMotor(int idx)
+{
+  stepperArr[idx]._ptr->stop();
+  stepperArr[idx]._running=false;
+  stepperArr[idx]._distance=0;
 }
 
 /*
   Reset the motor zero position.
 */
-void resetZero(int motorID)
+void resetZero(int idx)
 {
-  if(motorID>3 || motorID<1) return;
-  else
-  {
-    long offset;
-    stepperArr[motorID-1]._ptr->setCurrentPosition(offset); // reset the position and speed to 0
-    updateMotorSpeed(motorID); // set the speed
-    char tmpBuff[40];
-    sprintf(tmpBuff, "<P%d,%ld,%ld,%ld>", motorID,stepperArr[motorID-1]._ptr->targetPosition(), stepperArr[motorID-1]._ptr->currentPosition(),stepperArr[motorID-1]._ptr->distanceToGo() );
-    Serial.println(tmpBuff);
-    tmpBuff[0]=0;
-  }
-}
-
-/*
-  Update motor speed.
-*/
-void updateMotorSpeed(int motorID)
-{
-  if(motorID>3 || motorID<1) return;
-  else
-  {
-    stepperArr[motorID-1]._ptr->setMaxSpeed(stepperArr[motorID-1]._speed);
-  }
-}
-
-/*
-  Update motor acceleration.   
-*/
-void updateMotorAccel(int motorID)
-{
-  if(motorID>3 || motorID<1) return;
-  else
-  {
-    stepperArr[motorID-1]._ptr->setAcceleration(stepperArr[motorID-1]._accel);
-  }
-}
-
-/*
-  stop all steppers.
-*/
-void stopAllSteppers()
-{
-  for(short i=0;i<3;i++)
-  {
-    stepperArr[i]._ptr->stop();
-    stepperArr[i]._running=false;
-  }
+  stopMotor(idx);
+  // reset the position (also set speed to 0)
+  long offset;
+  stepperArr[idx]._ptr->setCurrentPosition(offset);
+  // set the proper speed
+  stepperArr[idx]._ptr->setMaxSpeed(stepperArr[idx]._speed);
+  stepperArr[idx]._ptr->move(0);
+  stepperArr[idx]._sendUpdate=true;
 }
 
 /*
   Update run parameter for one motor.
 */
-void updateRun(int motorID, char* dir, float distance)
+void updateRun(int idx, char* dir, float distance)
 {
   distance = (strcmp(dir, "F")==0)? distance : -distance ;
-  
-  if(motorID>3 || motorID<1) return;
-  else
-  {
-    stepperArr[motorID-1]._distance= distance;
-    stepperArr[motorID-1]._ptr->move(stepperArr[motorID-1]._distance);
-    stepperArr[motorID-1]._running= true;
-  } 
-  // update running flag
-  anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
+  stepperArr[idx]._distance= distance;
+  stepperArr[idx]._ptr->move(stepperArr[idx]._distance);
+  stepperArr[idx]._running= true;
+
+  updateRunningFlag();
 }
 
 /*
   Update setting for one motor
 */
-void udpateSetting(char* setting, int motorID, float value)
-{
-  if(motorID>3 || motorID<1) return;
-  else
-  { 
-      // reset position
-      stepperArr[motorID-1]._position=0;
-      if (strcmp(setting, "SPEED") == 0)
-      {
-        stepperArr[motorID-1]._speed= value;
-        stepperArr[motorID-1]._ptr->setMaxSpeed(stepperArr[motorID-1]._speed);
-      }
-      else if (strcmp(setting, "ACCEL") == 0)
-      {
-        stepperArr[motorID-1]._accel= value;
-        stepperArr[motorID-1]._ptr->setAcceleration(stepperArr[motorID-1]._accel);
-      }
-      else if (strcmp(setting, "DELTA") == 0) stepperArr[motorID-1]._delta= value;
-      else if(strcmp(setting, "TTL") == 0) stepperArr[motorID-1]._trigger= (value>0);
+void udpateSetting(char* setting, int idx, float value)
+{ 
+  if(stepperArr[idx]._running) stopMotor(idx);
+  if (strcmp(setting, "SPEED") == 0)
+  {
+    stepperArr[idx]._speed= value;
+    stepperArr[idx]._ptr->setMaxSpeed(stepperArr[idx]._speed);
   }
-}
+  else if (strcmp(setting, "ACCEL") == 0)
+  {
+    stepperArr[idx]._accel= value;
+    stepperArr[idx]._ptr->setAcceleration(stepperArr[idx]._accel);
+  }
+  else if (strcmp(setting, "DELTA") == 0) stepperArr[idx]._delta= value;
+  else if (strcmp(setting, "TTL") == 0) stepperArr[idx]._trigger= (value>0);
 
-/*
- reply to PC
-*/
-void replyToPC(char* mode, char* setting, int motorID, float value, char* dir, float p1_optional, float p2_optional, float p3_optional)
-{
-    Serial.print("<mode: ");
-    Serial.print(mode);
-    Serial.print(", setting: ");
-    Serial.print(setting);
-    Serial.print(", motorID: ");
-    Serial.print(motorID);
-    Serial.print(", value: ");
-    Serial.print(value);
-    Serial.print(", direction: ");
-    Serial.print(dir);
-    Serial.print(", p1 optional: ");
-    Serial.print(p1_optional);
-    Serial.print(", p2 optional: ");
-    Serial.print(p2_optional);
-    Serial.print(", p3 optional: ");
-    Serial.print(p3_optional);
-    Serial.print(", Time: ");
-    Serial.print(millis()/1000); // in seconds
-    Serial.println(">");
+  updateRunningFlag();
 }
 
 /*
@@ -286,6 +187,10 @@ void echo()
   Serial.print(inBuffer);
   Serial.println(">");
 }
+
+// =================================================================================
+// =================================================================================
+// =================================================================================
 
 /*
   Protothread for Serial port read
@@ -312,22 +217,27 @@ static int protothreadReadSerial(struct pt *pt)
     }
     else if (inChar == '>') // message end
     {
-      readInProgress = false;
       // terminate the string
       if(index<MAXBUFFERSIZE) inBuffer[index]='\0';
       else overflowed=true;
-      
+      // echo and update flag
       if(!overflowed)
       {
         messageToProcess=true;
         echo();
       }
+      else
+      {
+        messageToProcess= false;
+        Serial.println("<BUFFEROVERFLOW>");
+      }
+      readInProgress = false;
       digitalWrite(LEDPIN, LOW);
       overflowed=false;
     }
     else if (readInProgress)
     {
-      PT_WAIT_UNTIL(pt,!messageToProcess);
+      PT_WAIT_UNTIL(pt,!messageToProcess); // allow message processing
       if(index<MAXBUFFERSIZE)
       {
         inBuffer[index] = inChar;
@@ -378,33 +288,29 @@ void parseMessage()
     p_optional[0]= p_optional[1]= p_optional[2]= 999999.0;
   }
  
-  // reply
-  //echo();
-  //replyToPC(mode, setting, motorID, value, dir, p_optional[0], p_optional[1], p_optional[2]);
-
   // run the corresponding command
   if(strcmp(mode, "STOP") == 0)
   {
-    stopAllSteppers();
+    for(int i=0;i<3;i++) stopMotor(i);
   }
-  else if (strcmp(mode, "SETTING") == 0)
+  else if ((strcmp(mode, "SETTING") == 0) && (motorID>0 && motorID<4))
   {
-    udpateSetting(setting, motorID, value);
+    udpateSetting(setting, motorID-1, value);
   }
   else if (strcmp(mode, "RUN") == 0 && (strcmp(setting, "DIST") == 0))
   {
-    if(motorID>10)
+    if(motorID>10) // decompose the motorid
     {
       while(motorID>0)
       {
         int subMotorID = (motorID %10);
-        updateRun(subMotorID,dir,p_optional[subMotorID-1]); 
+        if(subMotorID>0 && subMotorID<4) updateRun(subMotorID-1,dir,p_optional[subMotorID-1]); 
         motorID /= 10;
       }
     }
-    else
+    else if(motorID>0 && motorID<4)
     {
-      updateRun(motorID,dir,p_optional[motorID-1]);  
+      updateRun(motorID-1,dir,p_optional[motorID-1]);  
     }
   }
   else if (strcmp(mode, "PAUSE") == 0)
@@ -414,13 +320,13 @@ void parseMessage()
       while(motorID>0)
       {
         int subMotorID = (motorID %10);
-        pauseMotor(subMotorID);
+        if(subMotorID>0 && subMotorID<4) pauseMotor(subMotorID-1);
         motorID /= 10;
       }
     }
-    else
+    else if(motorID>0 && motorID<4)
     {
-      pauseMotor(motorID);
+      pauseMotor(motorID-1);
     }
   }
   else if (strcmp(mode, "RESUME") == 0)
@@ -430,11 +336,11 @@ void parseMessage()
       while(motorID>0)
       {
         int subMotorID = (motorID %10);
-        resumeMotor(subMotorID);
+        if(subMotorID>0 && subMotorID<4) resumeMotor(subMotorID-1);
         motorID /= 10;
       }
     }
-    else resumeMotor(motorID);
+    else if(motorID>0 && motorID<4) resumeMotor(motorID-1);
   }
   else if (strcmp(mode, "ZERO") == 0)
   {
@@ -443,11 +349,11 @@ void parseMessage()
       while(motorID>0)
       {
         int subMotorID = (motorID %10);
-        resetZero(subMotorID);
+        if(subMotorID>0 && subMotorID<4) resetZero(subMotorID-1);
         motorID /= 10;
       }
     }
-    else resetZero(motorID);
+    else if(motorID>0 && motorID<4) resetZero(motorID-1);
   }
 }
 
@@ -475,7 +381,7 @@ static int protothreadParseMessage(struct pt *pt)
 static struct pt pt3;
 static int protothreadMoveMotors(struct pt *pt)
 {
-// Start the protothread
+  // Start the protothread
   PT_BEGIN(pt);
   while(1) 
   {
@@ -487,7 +393,7 @@ static int protothreadMoveMotors(struct pt *pt)
       {
         bool doRun = true; 
         // check for ttl
-        if(stepperArr[i]._trigger) doRun = (digitalRead(stepperArr[i]._TTLpin)==HIGH);
+        if(stepperArr[i]._trigger) doRun = (digitalRead(TTLPIN)==HIGH);
         
         if(doRun)
         {
@@ -498,7 +404,6 @@ static int protothreadMoveMotors(struct pt *pt)
           if (stepperArr[i]._distance == 0) 
           {
             stepperArr[i]._running=false;
-            stepperArr[i]._sendUpdate=true;
             doUpdate=true;//force update
           }
           if(doUpdate) stepperArr[i]._sendUpdate=true;
@@ -521,8 +426,8 @@ static int protothreadMoveMotors(struct pt *pt)
       }
       myTime=millis();
     }
-    anyMotorRunning = stepperArr[0]._running || stepperArr[1]._running || stepperArr[2]._running;
-    if(!anyMotorRunning) Serial.println("<PDONE>");
+    // update flags
+    updateRunningFlag();
     PT_WAIT_UNTIL(pt,Serial.available()==0); // allow read if any
   }
   // Stop the protothread
@@ -534,19 +439,12 @@ static int protothreadMoveMotors(struct pt *pt)
 */
 void setup()
 {
+  // init serial
   Serial.begin(BAUD_RATE);
-
-  // TTL input pin
-  pinMode(X_TTL_PIN, INPUT);
-  pinMode(Y_TTL_PIN, INPUT);
-  pinMode(Z_TTL_PIN, INPUT);
-  
-  // flash LED
+  // TTL input
+  pinMode(TTLPIN, INPUT);
+  // LED output  
   pinMode(LEDPIN, OUTPUT);
-  digitalWrite(LEDPIN, HIGH);
-  delay(500);
-  digitalWrite(LEDPIN, LOW);
-  delay(500);
   
   // init steppers
   stepperArr[0]._ptr= &stepperX;
@@ -558,15 +456,12 @@ void setup()
   stepperArr[0]._accel= X_ACCEL;
   stepperArr[1]._accel= Y_ACCEL;
   stepperArr[2]._accel= Z_ACCEL;
-  stepperArr[0]._TTLpin= X_TTL_PIN;
-  stepperArr[1]._TTLpin= Y_TTL_PIN;
-  stepperArr[2]._TTLpin= Z_TTL_PIN;
   
   // update motors
-  for(short i=1; i<4; i++)
+  for(short idx=0; idx<3; idx++)
   {
-    updateMotorSpeed(i);
-    updateMotorAccel(i);
+    stepperArr[idx]._ptr->setMaxSpeed(stepperArr[idx]._speed);
+    stepperArr[idx]._ptr->setAcceleration(stepperArr[idx]._accel);
   }
   
   // init protothreads
