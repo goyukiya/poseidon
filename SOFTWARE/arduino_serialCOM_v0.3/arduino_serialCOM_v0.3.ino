@@ -69,22 +69,6 @@ unsigned long myTime= millis();
 // =================================================================================
 
 /*
-  Checks if a number contains a specific digit.
- */
-bool containsDigit(int num, int d)
-{
-    while(num > 0)
-    {   
-      // digit matched
-      if(num % 10 == d) return true;
-      // move to next digit
-      num = num / 10;
-    }
-    // not found
-    return false;
-}
-
-/*
   Update running flag.
 */
 void updateRunningFlag()
@@ -129,6 +113,16 @@ void stopMotor(int idx)
 }
 
 /*
+  Send motor Position info.
+*/
+void sendPosition(int i)
+{
+  char tmpBuff[40];
+  sprintf(tmpBuff, "<P%d,%ld,%ld,%ld>", i+1,stepperArr[i]._ptr->targetPosition(), stepperArr[i]._ptr->currentPosition(),stepperArr[i]._ptr->distanceToGo() );
+  Serial.println(tmpBuff); 
+}
+
+/*
   Reset the motor zero position.
 */
 void resetZero(int idx)
@@ -139,8 +133,7 @@ void resetZero(int idx)
   stepperArr[idx]._ptr->setCurrentPosition(offset);
   // set the proper speed
   stepperArr[idx]._ptr->setMaxSpeed(stepperArr[idx]._speed);
-  stepperArr[idx]._ptr->move(0);
-  stepperArr[idx]._sendUpdate=true;
+  sendPosition(idx);
 }
 
 /*
@@ -391,23 +384,19 @@ static int protothreadMoveMotors(struct pt *pt)
     {
       if(stepperArr[i]._running)
       {
-        bool doRun = true; 
         // check for ttl
-        if(stepperArr[i]._trigger) doRun = (digitalRead(TTLPIN)==HIGH);
-        
-        if(doRun)
+        if(stepperArr[i]._trigger && (digitalRead(TTLPIN)!=HIGH)) continue;
+        // move one step
+        stepperArr[i]._ptr->run();
+        // update distance
+        stepperArr[i]._distance = stepperArr[i]._ptr->distanceToGo();
+        // Check if final position reached
+        if (stepperArr[i]._distance == 0) 
         {
-          stepperArr[i]._ptr->run();
-          // update distance
-          stepperArr[i]._distance = stepperArr[i]._ptr->distanceToGo();
-          // Check if final position reached
-          if (stepperArr[i]._distance == 0) 
-          {
-            stepperArr[i]._running=false;
-            doUpdate=true;//force update
-          }
-          if(doUpdate) stepperArr[i]._sendUpdate=true;
+          stepperArr[i]._running=false;
+          doUpdate=true;//force update
         }
+        if(doUpdate) stepperArr[i]._sendUpdate=true;
       }
     }
     // send position updates
@@ -417,10 +406,7 @@ static int protothreadMoveMotors(struct pt *pt)
       {
         if(stepperArr[i]._sendUpdate)
         {
-          char tmpBuff[40];
-          sprintf(tmpBuff, "<P%d,%ld,%ld,%ld>", i+1,stepperArr[i]._ptr->targetPosition(), stepperArr[i]._ptr->currentPosition(),stepperArr[i]._ptr->distanceToGo() );
-          Serial.println(tmpBuff);
-          tmpBuff[0]=0;
+          sendPosition(i);
           stepperArr[i]._sendUpdate=false;
         } 
       }
