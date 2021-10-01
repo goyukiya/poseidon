@@ -171,16 +171,6 @@ void udpateSetting(char* setting, int idx, float value)
   updateRunningFlag();
 }
 
-/*
-  echo message
-*/
-void echo()
-{
-  Serial.print("<");
-  Serial.print(inBuffer);
-  Serial.println(">");
-}
-
 // =================================================================================
 // =================================================================================
 // =================================================================================
@@ -216,8 +206,10 @@ static int protothreadReadSerial(struct pt *pt)
       // echo and update flag
       if(!overflowed)
       {
+        Serial.print('<');
+        Serial.print(inBuffer);
+        Serial.println('>');
         messageToProcess=true;
-        echo();
       }
       else
       {
@@ -376,10 +368,10 @@ static int protothreadMoveMotors(struct pt *pt)
 {
   // Start the protothread
   PT_BEGIN(pt);
+  static bool doUpdate=false;
   while(1) 
   {
     PT_WAIT_UNTIL(pt,!readInProgress && !messageToProcess && anyMotorRunning);
-    bool doUpdate = (millis()-myTime > 1000);
     for(short i=0;i<3;i++)
     {
       if(stepperArr[i]._running)
@@ -412,6 +404,7 @@ static int protothreadMoveMotors(struct pt *pt)
       }
       myTime=millis();
     }
+    doUpdate = (millis()-myTime > 1000);
     // update flags
     updateRunningFlag();
     PT_WAIT_UNTIL(pt,Serial.available()==0); // allow read if any

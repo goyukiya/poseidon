@@ -67,8 +67,6 @@ class Thread(QtCore.QThread):
 
     def run(self):
         try:
-            #self.serial.flushInput()
-            #self.serial.flushOutput()
             result = self.fn(*self.args, **self.kwargs)
         except:
             traceback.print_exc()
@@ -121,25 +119,21 @@ class ArduinoSerialThread:
                 self.__lock.release()
                 print("[ArduinoSerialThread] sending >>> "+msg)
                 self.__sendMessage(msg)
-            time.sleep(self.__delay)
-
             # check for incoming message
             if self.__serial.inWaiting() >0:
                 self.__lock.acquire()
                 msg = self.__receiveMessage()
                 # not empty -> add to the queue
                 if msg:
-                    self.__recvQueue.put(msg)
                     print("[ArduinoSerialThread] received <<< "+msg)
+                    if msg not in "Arduino is ready": # special message at setup time
+                        self.__recvQueue.put(msg)
                 self.__lock.release()
-            time.sleep(self.__delay)
-
         print("[ArduinoSerialThread] Thread ended")
         self.__serial.close()
 
     def __sendMessage(self,msg):
         self.__serial.write(msg.encode())
-        self.__serial.flushInput()
 
     def __receiveMessage(self):
         if self.__serial.inWaiting() <1:
@@ -162,6 +156,7 @@ class ArduinoSerialThread:
         if not self.__recvQueue.empty():
             self.__lock.acquire()
             msg = self.__recvQueue.get()
+            self.__recvQueue.task_done()
             self.__lock.release()
         else:
             msg=""
@@ -175,10 +170,13 @@ class ArduinoSerialThread:
     def start(self):
         print('[ArduinoSerialThread] Starting thread')
         self.__thread.daemon = True # run as a daemon
+        self.__running= True
         self.__thread.start()
 
     def stop(self):
-        self.__running= False	
+        self.__lock.acquire()
+        self.__running= False
+        self.__lock.release()	
 
     def join(self):
         self.__thread.join()
@@ -225,8 +223,6 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         # Initializing multithreading to allow parallel operations
         self.threadpool = QtCore.QThreadPool()
         print("Multithreading with maximum %d threads" % self.threadpool.maxThreadCount())
-
-        self.doListen= False
 
         # Camera setup
         self.timer = QtCore.QTimer()
@@ -314,9 +310,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 
         # Action buttons
         self.ui.run_BTN.clicked.connect(self.run)
-
         self.ui.pause_BTN.clicked.connect(self.pause)
-
         self.ui.zero_BTN.clicked.connect(self.zero)
         self.ui.stop_BTN.clicked.connect(self.stop)
 
@@ -510,23 +504,29 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 
     def display_p1_syringe(self):
         self.ui.p1_syringe_LABEL.setText(self.ui.p1_syringe_DROPDOWN.currentText())
+
     def display_p2_syringe(self):
         self.ui.p2_syringe_LABEL.setText(self.ui.p2_syringe_DROPDOWN.currentText())
+
     def display_p3_syringe(self):
         self.ui.p3_syringe_LABEL.setText(self.ui.p3_syringe_DROPDOWN.currentText())
 
     def display_p1_speed(self):
         self.ui.p1_units_LABEL.setText(str(self.p1_speed) + " " + self.ui.p1_units_DROPDOWN.currentText())
+
     def display_p2_speed(self):
         self.ui.p2_units_LABEL.setText(str(self.p2_speed) + " " + self.ui.p2_units_DROPDOWN.currentText())
+
     def display_p3_speed(self):
         self.ui.p3_units_LABEL.setText(str(self.p3_speed) + " " + self.ui.p3_units_DROPDOWN.currentText())
 
     # Set Px distance to move
     def set_p1_amount(self):
         self.p1_amount = self.ui.p1_amount_INPUT.value()
+
     def set_p2_amount(self):
         self.p2_amount = self.ui.p2_amount_INPUT.value()
+    
     def set_p3_amount(self):
         self.p3_amount = self.ui.p3_amount_INPUT.value()
 
@@ -549,10 +549,10 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 
     # Run command
     def run(self):
-        self.statusBar().showMessage("You clicked RUN")
-
         active_pumps = self.get_active_pumps()
         if len(active_pumps) > 0:
+            self.statusBar().showMessage("You clicked RUN")
+
             p1_input_displacement = str(self.convert_displacement(self.p1_amount, self.p1_units, self.p1_syringe_area, self.microstepping))
             p2_input_displacement = str(self.convert_displacement(self.p2_amount, self.p2_units, self.p2_syringe_area, self.microstepping))
             p3_input_displacement = str(self.convert_displacement(self.p3_amount, self.p3_units, self.p3_syringe_area, self.microstepping))
@@ -563,6 +563,13 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
             thread.finished.connect(lambda:self.thread_finished(thread))
             thread.start()
             print("RUN command sent.")
+
+            # start the position update thread
+            if not self.positionThreadEnabled:
+                self.positionThreadEnabled=True
+                self.positionThread = Thread(self.updatePosition)
+                self.positionThread.finished.connect(lambda:self.thread_finished(self.positionThread))
+                self.positionThread.start()
         else:
             self.statusBar().showMessage("No pumps enabled.")
 
@@ -570,8 +577,6 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
     def pause(self):
         active_pumps = self.get_active_pumps()
         if len(active_pumps) > 0:
-            pumps_2_run = ''.join(map(str,active_pumps))
-
             if self.ui.pause_BTN.text() == "Pause":
                 self.statusBar().showMessage("You clicked PAUSE")
                 cmd = "PAUSE"
@@ -582,7 +587,8 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
                 cmd = "RESUME"
                 # update button text
                 self.ui.pause_BTN.setText("Pause")
-            
+            pumps_2_run = ''.join(map(str,active_pumps))
+
             print("Sending PAUSE command..")
             thread = Thread(self.runCmd, ["<{},BLAH,{},BLAH,F,0.0,0.0,0.0>".format(cmd,pumps_2_run)])
             thread.finished.connect(lambda:self.thread_finished(thread))
@@ -596,32 +602,45 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         active_pumps = self.get_active_pumps()
         if len(active_pumps) > 0:
             self.statusBar().showMessage("You clicked ZERO")
+
             print("Sending ZERO command..")
             thread = Thread(self.runCmd, ["<ZERO,BLAH,{},BLAH,F,0.0,0.0,0.0>".format(''.join(map(str,active_pumps)))])
             thread.finished.connect(lambda:self.thread_finished(thread))
             thread.start()
             print("ZERO command sent.")
+
+            # start the position update thread
+            if not self.positionThreadEnabled:
+                self.positionThreadEnabled=True
+                self.positionThread = Thread(self.updatePosition)
+                self.positionThread.finished.connect(lambda:self.thread_finished(self.positionThread))
+                self.positionThread.start()
         else:
             self.statusBar().showMessage("No pumps enabled.")
 
     # Stop command
     def stop(self):
-        self.statusBar().showMessage("You clicked STOP")
-        print("Sending STOP command..")
-        thread = Thread(self.runCmd, ["<STOP,BLAH,BLAH,BLAH,F,0.0,0.0,0.0>"])
-        thread.finished.connect(lambda:self.thread_finished(thread))
-        thread.start()
-        print("STOP command sent.")
+        active_pumps = self.get_active_pumps()
+        if len(active_pumps) > 0:
+            self.statusBar().showMessage("You clicked STOP")
+
+            print("Sending STOP command..")
+            thread = Thread(self.runCmd, ["<STOP,BLAH,BLAH,BLAH,F,0.0,0.0,0.0>"])
+            thread.finished.connect(lambda:self.thread_finished(thread))
+            thread.start()
+            print("STOP command sent.")
+
+            # stop the position update thread
+            if self.positionThreadEnabled:
+                self.positionThreadEnabled=False
+                time.sleep(0.01)
+        else:
+            self.statusBar().showMessage("No pumps enabled.")
 
     # Jog command
     def jog(self, btn):
         active_pumps = self.get_active_pumps()
         if len(active_pumps) > 0:
-            pumps_2_run = ''.join(map(str,active_pumps))
-            one_jog = str(self.p1_setup_jog_delta_to_send)
-            two_jog = str(self.p2_setup_jog_delta_to_send)
-            three_jog = str(self.p3_setup_jog_delta_to_send)
-
             direction ='F'
             if btn.text() == "Jog +":
                 self.statusBar().showMessage("You clicked JOG +")
@@ -629,11 +648,23 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
                 self.statusBar().showMessage("You clicked JOG -")
                 direction='B'
             
+            pumps_2_run = ''.join(map(str,active_pumps))
+            one_jog = str(self.p1_setup_jog_delta_to_send)
+            two_jog = str(self.p2_setup_jog_delta_to_send)
+            three_jog = str(self.p3_setup_jog_delta_to_send)
+            
             print("Sending JOG command..")
             thread = Thread(self.runCmd, ["<RUN,DIST,{},0,{},{},{},{}>".format(pumps_2_run,direction,one_jog,two_jog,three_jog)])
             thread.finished.connect(lambda:self.thread_finished(thread))
             thread.start()
             print("JOG command sent.")
+
+            # start the position update thread
+            if not self.positionThreadEnabled:
+                self.positionThreadEnabled=True
+                self.positionThread = Thread(self.updatePosition)
+                self.positionThread.finished.connect(lambda:self.thread_finished(self.positionThread))
+                self.positionThread.start()
         else:
             self.statusBar().showMessage("No pumps enabled.")
 
@@ -929,7 +960,8 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
     def populate_microstepping(self):
         self.microstepping_values = ['1', '2', '4', '8', '16', '32']
         self.ui.microstepping_DROPDOWN.addItems(self.microstepping_values)
-        self.microstepping = 1
+        self.ui.microstepping_DROPDOWN.setCurrentIndex(5)
+        self.microstepping = 32
 
     # Populate the list of possible syringes to the dropdown menus
     def populate_syringe_sizes(self):
@@ -1073,11 +1105,13 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
             self.p1_TTL = 1.0
         else:
             self.p1_TTL = 0.0
+
     def set_p2_setup_Trigger(self):
         if self.ui.TTL2.isChecked():
             self.p2_TTL = 1.0
         else:
             self.p2_TTL = 0.0
+
     def set_p3_setup_Trigger(self):
         if self.ui.TTL3.isChecked():
             self.p3_TTL = 1.0
@@ -1136,25 +1170,11 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         try:
             port_declared = self.port in vars()
             try:
-
-                # self.serial = serial.Serial()
-                # self.serial.port = self.port
-                # self.serial.baudrate = 230400
-                # self.serial.parity = serial.PARITY_NONE
-                # self.serial.stopbits = serial.STOPBITS_ONE
-                # self.serial.bytesize = serial.EIGHTBITS
-                # self.serial.timeout = 1
-                # self.serial.open()
-                # self.serial.flushInput()
-
-                # This is a thread that always runs and listens to commands from the Arduino
-                #self.global_listener_thread = Thread(self.listening)
-                #self.global_listener_thread.finished.connect(lambda:self.self.thread_finished(self.global_listener_thread))
-                #self.global_listener_thread.start()
-               
                 # arduino communication thread
                 self.arduinoThread = ArduinoSerialThread(self.port)
                 self.arduinoThread.start()
+
+                self.positionThreadEnabled= False
 
                 # ~~~~~~~~~~~~~~~~
                 # TAB : Setup
@@ -1166,7 +1186,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
                 self.ui.send_all_BTN.setEnabled(True)
 
                 self.ui.connect_BTN.setEnabled(False)
-                time.sleep(3)
+                time.sleep(1)
                 self.statusBar().showMessage("Successfully connected to board.")
             except:
                 self.statusBar().showMessage("Cannot connect to board. Try again..")
@@ -1181,8 +1201,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         print("Disconnecting from board..")
         self.arduinoThread.stop()
         self.positionThreadEnabled= False
-        time.sleep(3)
-        # self.serial.close()
+        time.sleep(0.001)
         print("Board has been disconnected")
 
         self.grey_out_components()
@@ -1381,132 +1400,53 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 
     # thread function to run a command
     def runCmd(self, messages):
-
-        self.positionThreadEnabled=False
-        time.sleep(0.3)
-
         for message in messages:
-            print("processing {}...".format(message))
+            print("[runThread] Processing {}...".format(message))
             self.arduinoThread.pushSendMessage(message)
-            while 1:
+            print("[runThread] waiting for reply ...")
+            while True:
                 msg = self.arduinoThread.getRecvMessage()
                 if not msg:
-                    time.sleep(0.3)  
+                    time.sleep(0.01)
                 else:
-                    break
-            print("... done!")
+                    if msg in message: # proper echo
+                        break
+                    elif msg in "<BUFFEROVERFLOW>":
+                        print("[runThread] ERROR: message too long!")
+                    else:
+                        print("[runThread] ERROR: sent {} but received {}".format(message,msg))
+                        self.arduinoThread.requeueMessage(msg)
+            print("[runThread] ... Done!")
         
-        # start the position update thread 
-        self.positionThreadEnabled=True
-        self.positionThread = Thread(self.updatePosition)
-        self.positionThread.finished.connect(lambda:self.self.thread_finished(self.positionThread))
-        self.positionThread.start()
-
-        print("Send and receive complete\n")
-
-    # def send_single_command(self, command):
-    #     waiting_for_reply = False
-    #     if waiting_for_reply == False:
-    #         self.arduinoThread.pushSendMessage(command)
-    #         #print("Sent from PC -- STR " + command)
-    #         waiting_for_reply = True
-    #     if waiting_for_reply == True:
-    #         while self.serial.inWaiting() == 0:
-    #             pass
-    #         #data_received = self.recvFromArduino2()
-    #         data_received = "from other func"
-    #         print("Reply Received -- " + data_received)
-    #         waiting_for_reply = False
-    #         print("=============================\n\n")
-    #         print("Sent a single command")
+        print("[runThread] Complete")
 
     # thread function for updating pump positions
     def updatePosition(self):
-        print("[UpdatePosition] started")
-        while 1:
+        print("[PositionThread] started")
+        while True:
             if not self.positionThreadEnabled:
                 break
             msg = self.arduinoThread.getRecvMessage()
             if not msg:
-                time.sleep(0.05)
-                continue
-            # position message structure Px,target,absolute,remaining
-            parts = msg.split(',')
-            if parts[0]=="P1":
-                self.ui.p1_absolute_DISP.display(parts[2])
-                self.ui.p1_remain_DISP.display(parts[3])
-            elif parts[0]=="P2":
-                self.ui.p2_absolute_DISP.display(parts[2])
-                self.ui.p2_remain_DISP.display(parts[3])
-            elif parts[0]=="P3":
-                self.ui.p3_absolute_DISP.display(parts[2])
-                self.ui.p3_remain_DISP.display(parts[3])
-            elif parts[0] in ["SETTING","RUN","ZERO","PAUSE","STOP","RESUME"]:
-                self.arduinoThread.requeueMessage(msg)
-        print("[UpdatePosition] done")
-
-    # def listening(self):
-    #     startMarker = self.startMarker
-    #     midMarker = self.midMarker
-    #     endMarker = self.endMarker
-    #     posMarker = ord('?')
-    #     i = 0
-
-    #     while (True):
-    #         self.serial.flushInput()
-    #         x = "z"
-    #         ck = ""
-    #         isDisplay = "asdf"
-    #         while self.serial.inWaiting() == 0:
-    #             pass
-    #         while  not x or ord(x) != startMarker:
-    #             x = self.serial.read()
-    #             #if ord(x) == posMarker:
-    #             #	return self.get_position()
-    #         while ord(x) != endMarker:
-    #             if ord(x) == midMarker:
-    #                 i += 1
-    #                 print(ck)
-    #                 #isDisplay = ck
-    #                 #if i % 100 == 0:
-    #                 #	self.ui.p1_absolute_DISP.display(ck)
-    #                 ck = ""
-    #                 x = self.serial.read()
-
-    #             if ord(x) != startMarker:
-    #                 ck = ck + x.decode()
-
-    #             x = self.serial.read()
-    #             # TODO
-    #         #if isDisplay == "START":
-    #         #	print("This is ck: " + ck)
-    #             #motorID = int(ck)
-    #             #self.is_p1_running = True
-    #             #run thread(self.display_position, motorID)
-
-    #             #toDisp = self.steps2mm(float(ck))
-    #             #print("Pump num " + toDisp + " is now running.")i
-    #             #self.ui.p1_absolute_DISP.display(toDisp)
-    #             #isDisplay = ""
-
-    #         #self.serial.flushInput()
-    #         #print(self.serial.read(self.serial.inWaiting()).decode('ascii'))
-    #         print(ck)
-    #         print("\n")
-
-    # def get_position(self):
-    #     ck = ""
-    #     x = self.serial.read()
-
-    #     while ord(x) != self.endMarker:
-    #         if ord(x) == self.midMarker:
-    #             print(ck)
-    #             ck = ""
-    #             x = self.serial.read()
-    #         ck = ck + x.decode()
-    #         x = self.serial.read()
-    #     print(ck)
-    #     return (ck)
+                time.sleep(0.01)
+            else:
+                # position message structure Px,target,absolute,remaining
+                parts = msg.split(',')
+                if parts[0]=="P1":
+                    print("[PositionThread] Updating P1")
+                    self.ui.p1_absolute_DISP.display(parts[2])
+                    self.ui.p1_remain_DISP.display(parts[3])
+                elif parts[0]=="P2":
+                    print("[PositionThread] Updating P2")
+                    self.ui.p2_absolute_DISP.display(parts[2])
+                    self.ui.p2_remain_DISP.display(parts[3])
+                elif parts[0]=="P3":
+                    print("[PositionThread] Updating P3")
+                    self.ui.p3_absolute_DISP.display(parts[2])
+                    self.ui.p3_remain_DISP.display(parts[3])
+                elif parts[0] in ["SETTING","RUN","ZERO","PAUSE","STOP","RESUME"]:
+                    self.arduinoThread.requeueMessage(msg)
+        print("[PositionThread] Done")
 
     def closeEvent(self, event):
         try:
