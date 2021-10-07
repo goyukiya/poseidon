@@ -93,7 +93,6 @@ class ArduinoSerialThread:
         self.__lock= threading.Lock()
         self.__sendQueue= queue.Queue()
         self.__recvQueue= queue.Queue()
-        self.__delay= 0.05
         try:
             self.__serial = serial.Serial()
             self.__serial.port = port
@@ -154,7 +153,7 @@ class ArduinoSerialThread:
 
     def getRecvMessage(self):
         if not self.__recvQueue.empty():
-            self.__lock.acquire()
+            self.__lock.acquire()            
             msg = self.__recvQueue.get()
             self.__recvQueue.task_done()
             self.__lock.release()
@@ -166,7 +165,7 @@ class ArduinoSerialThread:
         self.__lock.acquire()
         self.__recvQueue.put(msg)
         self.__lock.release()
-
+        
     def start(self):
         print('[ArduinoSerialThread] Starting thread')
         self.__thread.daemon = True # run as a daemon
@@ -174,9 +173,7 @@ class ArduinoSerialThread:
         self.__thread.start()
 
     def stop(self):
-        self.__lock.acquire()
         self.__running= False
-        self.__lock.release()	
 
     def join(self):
         self.__thread.join()
@@ -1175,6 +1172,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
                 self.arduinoThread.start()
 
                 self.positionThreadEnabled= False
+                self.doPositionUpdate= False
 
                 # ~~~~~~~~~~~~~~~~
                 # TAB : Setup
@@ -1201,6 +1199,7 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         print("Disconnecting from board..")
         self.arduinoThread.stop()
         self.positionThreadEnabled= False
+        self.doPositionUpdate= False
         time.sleep(0.001)
         print("Board has been disconnected")
 
@@ -1400,24 +1399,31 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
 
     # thread function to run a command
     def runCmd(self, messages):
+        self.doPositionUpdate= False
         for message in messages:
             print("[runThread] Processing {}...".format(message))
             self.arduinoThread.pushSendMessage(message)
+            retryCounter=0
+            time.sleep(0.01) # 10 ms wait
             print("[runThread] waiting for reply ...")
             while True:
                 msg = self.arduinoThread.getRecvMessage()
                 if not msg:
-                    time.sleep(0.01)
+                    continue
                 else:
                     if msg in message: # proper echo
                         break
                     elif msg in "<BUFFEROVERFLOW>":
                         print("[runThread] ERROR: message too long!")
+                        break
+                    elif msg[0]=='P': # position message
+                        self.processPositionMessage(msg)
                     else:
-                        print("[runThread] ERROR: sent {} but received {}".format(message,msg))
-                        self.arduinoThread.requeueMessage(msg)
+                        retryCounter=retryCounter+1
+                if retryCounter>3:
+                    break
             print("[runThread] ... Done!")
-        
+        self.doPositionUpdate= True
         print("[runThread] Complete")
 
     # thread function for updating pump positions
@@ -1426,28 +1432,29 @@ class MainWindow(QtWidgets.QMainWindow, poseidon_controller_gui.Ui_MainWindow):
         while True:
             if not self.positionThreadEnabled:
                 break
-            msg = self.arduinoThread.getRecvMessage()
-            if not msg:
-                time.sleep(0.01)
-            else:
-                # position message structure Px,target,absolute,remaining
-                parts = msg.split(',')
-                if parts[0]=="P1":
-                    print("[PositionThread] Updating P1")
-                    self.ui.p1_absolute_DISP.display(parts[2])
-                    self.ui.p1_remain_DISP.display(parts[3])
-                elif parts[0]=="P2":
-                    print("[PositionThread] Updating P2")
-                    self.ui.p2_absolute_DISP.display(parts[2])
-                    self.ui.p2_remain_DISP.display(parts[3])
-                elif parts[0]=="P3":
-                    print("[PositionThread] Updating P3")
-                    self.ui.p3_absolute_DISP.display(parts[2])
-                    self.ui.p3_remain_DISP.display(parts[3])
-                elif parts[0] in ["SETTING","RUN","ZERO","PAUSE","STOP","RESUME"]:
-                    self.arduinoThread.requeueMessage(msg)
+            if self.doPositionUpdate:
+                msg = self.arduinoThread.getRecvMessage()
+                if not msg:
+                    continue
+                else:
+                   self.processPositionMessage(msg)
         print("[PositionThread] Done")
 
+    # position message structure Px,target,absolute,remaining
+    def processPositionMessage(self, msg):
+        parts = msg.split(',')
+        if parts[0]=="P1":
+            self.ui.p1_absolute_DISP.display(parts[2])
+            self.ui.p1_remain_DISP.display(parts[3])
+        elif parts[0]=="P2":
+            self.ui.p2_absolute_DISP.display(parts[2])
+            self.ui.p2_remain_DISP.display(parts[3])
+        elif parts[0]=="P3":
+            self.ui.p3_absolute_DISP.display(parts[2])
+            self.ui.p3_remain_DISP.display(parts[3])
+        else:
+            print("\tUnknown message '{}'".format(msg))
+    
     def closeEvent(self, event):
         try:
             #self.global_listener_thread.stop()
